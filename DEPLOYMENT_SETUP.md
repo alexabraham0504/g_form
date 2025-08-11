@@ -12,6 +12,7 @@
    localhost
    forms-phi-three.vercel.app
    forms-b7v6p6bt5-alexys-projects-09a52426.vercel.app
+   forms-chi-sand.vercel.app
    ```
 
 ### **Step 2: Set Environment Variables in Vercel**
@@ -61,6 +62,7 @@ VITE_FIREBASE_MEASUREMENT_ID=G-HM6WH706MC
 ### **Common Issues:**
 
 - **Domain mismatch**: Make sure the domain in your browser matches exactly what's in Firebase
+- **New deployments**: If you deploy to a new URL (like forms-chi-sand.vercel.app), add it to Firebase authorized domains
 - **Caching**: Clear browser cache and cookies
 - **Timing**: Firebase changes can take a few minutes to propagate
 

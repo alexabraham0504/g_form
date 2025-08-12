@@ -112,7 +112,7 @@ app.get('/auth/google/callback', async (req, res) => {
     await writeTokens(tokens);
     
     // Redirect to frontend callback
-     res.redirect(`${process.env.VITE_APP_URL || 'http://localhost:5173'}/oauth-callback?success=true`);
+     res.redirect(`${process.env.VITE_APP_URL || 'https://forms-fnuk.onrender.com'}/oauth-callback?success=true`);
   } catch (error) {
     console.error('Error getting tokens:', error);
     res.status(500).send(`Error getting tokens: ${error.message}`);

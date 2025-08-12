@@ -158,11 +158,11 @@ const FormResponses = () => {
     return true;
   };
 
-  // Check Google OAuth status
-  const checkGoogleAuthStatus = async () => {
-    try {
-      const API_BASE_URL = import.meta.env.VITE_API_URL || '';
-      const response = await fetch(`${API_BASE_URL}/auth/google/status`);
+        // Check Google OAuth status
+      const checkGoogleAuthStatus = async () => {
+        try {
+          const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://forms-fnuk.onrender.com';
+          const response = await fetch(`${API_BASE_URL}/auth/google/status`);
       const data = await response.json();
       
       if (data.authenticated && data.email) {
@@ -188,8 +188,8 @@ const FormResponses = () => {
     // Save current location to return after auth
     sessionStorage.setItem('oauth_return_url', window.location.pathname);
     
-    // Redirect to Google OAuth
-    const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+    // Redirect to Google OAuth - use deployed URL
+    const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://forms-fnuk.onrender.com';
     window.location.href = `${API_BASE_URL}/auth/google`;
   };
 
@@ -228,7 +228,7 @@ const FormResponses = () => {
       const sheetData = [headers, ...rows];
 
       // Call Google Sheets API
-      const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+      const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://forms-fnuk.onrender.com';
       const response = await fetch(`${API_BASE_URL}/api/google-sheets/create`, {
         method: 'POST',
         headers: {

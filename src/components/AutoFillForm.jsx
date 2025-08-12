@@ -501,7 +501,7 @@ Please respond with only the answers, with each set of answers separated by "---
 
     console.log('Validating URL:', formUrl);
     if (!validateGoogleFormUrl(formUrl)) {
-      setError('Please enter a valid form URL. Supported formats:\n\nInternal Forms:\n- localhost:5173/public/[ID] or any URL with /public/[ID]\n\nMake sure the form is publicly accessible and the URL is correct.');
+      setError('Please enter a valid form URL. Supported formats:\n\nInternal Forms:\n- Any URL with /public/[ID]\n\nMake sure the form is publicly accessible and the URL is correct.');
       return;
     }
     
@@ -625,7 +625,7 @@ Please respond with only the answers, with each set of answers separated by "---
           async () => {
             try {
               console.log('Trying local server proxy...');
-              const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+              const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://forms-fnuk.onrender.com';
               const response = await fetch(`${API_BASE_URL}/api/proxy-form`, {
                 method: 'POST',
                 headers: {
@@ -744,7 +744,7 @@ Please respond with only the answers, with each set of answers separated by "---
             try {
               console.log('Trying service worker approach...');
               if ('serviceWorker' in navigator) {
-                const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+                const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://forms-fnuk.onrender.com';
                 const response = await fetch(`${API_BASE_URL}/api/form-proxy`, {
                   method: 'POST',
                   headers: {
@@ -1644,7 +1644,7 @@ Please respond with only the answers, with each set of answers separated by "---
                 <div style={{ flex: 1 }}>
                   <input
                     type="url"
-                    placeholder="Enter public form URL (localhost:5174/public/...)"
+                    placeholder="Enter public form URL (e.g., /public/[ID])"
                     value={formUrl}
                     onChange={(e) => setFormUrl(e.target.value)}
                     style={{

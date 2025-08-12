@@ -111,13 +111,15 @@ app.get('/auth/google/callback', async (req, res) => {
     // Save tokens to file
     await writeTokens(tokens);
     
-    // Redirect to frontend callback
-     res.redirect(`${process.env.VITE_APP_URL || 'https://forms-fnuk.onrender.com'}/oauth-callback?success=true`);
+    // Redirect to frontend callback - always use deployed URL for now
+    res.redirect(`https://forms-fnuk.onrender.com/oauth-callback?success=true`);
   } catch (error) {
     console.error('Error getting tokens:', error);
     res.status(500).send(`Error getting tokens: ${error.message}`);
   }
 });
+
+
 
 app.post('/auth/google/callback', async (req, res) => {
   const { code } = req.body;

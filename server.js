@@ -298,6 +298,11 @@ app.post('/api/proxy-form', async (req, res) => {
       return res.status(400).json({ error: 'URL is required' });
     }
     
+    // Validate that this is a Google Form URL
+    if (!url.includes('docs.google.com/forms')) {
+      return res.status(400).json({ error: 'Invalid Google Form URL' });
+    }
+    
     console.log('Proxying request to:', url);
     
     const response = await fetch(url, {

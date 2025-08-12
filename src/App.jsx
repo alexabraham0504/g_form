@@ -11,6 +11,7 @@ import PublicForm from './components/PublicForm';
 import FormResponses from './components/FormResponses';
 import OAuthCallback from './components/OAuthCallback';
 import Settings from './components/Settings';
+import GoogleFormImport from './components/GoogleFormImport';
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -219,6 +220,16 @@ function App() {
               }
             />
             <Route path="/oauth-callback" element={<OAuthCallback />} />
+            <Route 
+              path="/google-form-import" 
+              element={
+                <ProtectedRoute>
+                  <PageLayout>
+                    <GoogleFormImport />
+                  </PageLayout>
+                </ProtectedRoute>
+              } 
+            />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </Router>

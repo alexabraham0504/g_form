@@ -20,7 +20,8 @@ const AutoFillForm = () => {
   const [showModal, setShowModal] = useState(false);
   const [responseOptions, setResponseOptions] = useState({
     count: 5,
-    positiveRatio: 50
+    positiveCount: 3,
+    negativeCount: 2
   });
 
 
@@ -216,7 +217,7 @@ const AutoFillForm = () => {
     return questions;
   };
 
-  const generateGeminiPrompt = (questions) => {
+  const generateGeminiPrompt = (questions, namesList = []) => {
     const questionList = questions.map(q => {
       if (q.type === 'multiple-choice' || q.type === 'checkbox' || 
           q.type === 'multiple_choice' || q.type === 'checkboxes' || 
@@ -226,14 +227,25 @@ const AutoFillForm = () => {
       return q.text;
     }).join('\n- ');
     
-    const positiveRatio = responseOptions.positiveRatio;
+    const positiveCount = responseOptions.positiveCount;
+    const negativeCount = responseOptions.negativeCount;
+    
+    // Check if we have a name question and names list
+    const nameQuestion = questions.find(q => q.id === 'name_q' || (q.metadata && q.metadata.source === 'name_upload'));
+    const hasNameDistribution = nameQuestion && namesList && namesList.length > 0;
+    
+    let nameInstructions = '';
+    if (hasNameDistribution) {
+      // Add instructions for name distribution
+      nameInstructions = `\n\nFor the Name question, please use only these exact names from the provided list:\n${namesList.join(', ')}\n\nDistribute these names evenly across the ${responseOptions.count} response sets.`;
+    }
     
     return `Please provide ${responseOptions.count} sets of realistic and appropriate answers for the following form questions. Each answer should be 1-3 sentences and contextually relevant.
 
 Questions:
 - ${questionList}
 
-Make ${positiveRatio}% of the responses positive/favorable and ${100-positiveRatio}% negative/critical in sentiment.
+Make ${positiveCount} of the responses positive/favorable and ${negativeCount} negative/critical in sentiment.${nameInstructions}
 
 For multiple choice or checkbox questions, provide a clear selection from the available options. DO NOT generate text answers for multiple choice questions - just select one of the available options exactly as it appears.
 
@@ -269,7 +281,7 @@ Please respond with only the answers, with each set of answers separated by "---
     return data.candidates[0].content.parts[0].text;
   };
 
-  const parseGeminiResponse = (response, questions) => {
+  const parseGeminiResponse = (response, questions, namesList = []) => {
     const answerSets = response.split('---').map(set => set.trim());
     const allAnswerSets = [];
     answerSets.forEach((answerSet, setIndex) => {
@@ -286,8 +298,32 @@ Please respond with only the answers, with each set of answers separated by "---
             // from the Gemini response
             const answerText = answers[index];
             
-            // If the question has options, try to find the exact match
-            if (question.options && question.options.length > 0) {
+            // Special handling for name questions when we have a namesList
+            const isNameQuestion = question.id === 'name_q' || 
+                                  (question.metadata && question.metadata.source === 'name_upload') ||
+                                  question.text.toLowerCase() === 'name' || 
+                                  question.text.toLowerCase().includes('name');
+            
+            if (isNameQuestion && namesList && namesList.length > 0) {
+              // For name questions, prioritize using names from the namesList
+              // Try to find an exact match in the namesList first
+              const nameMatch = namesList.find(name => 
+                answerText.toLowerCase() === name.toLowerCase() || 
+                answerText.includes(name));
+              
+              if (nameMatch) {
+                // Use the exact name from the namesList
+                answersMap[question.id] = nameMatch;
+                console.log(`Using name from namesList for set ${setIndex + 1}: ${nameMatch}`);
+              } else {
+                // If no match in namesList, use a name from the list based on the setIndex
+                // This ensures even distribution of names across answer sets
+                const nameIndex = setIndex % namesList.length;
+                answersMap[question.id] = namesList[nameIndex];
+                console.log(`Assigning name for set ${setIndex + 1}: ${namesList[nameIndex]}`);
+              }
+            } else if (question.options && question.options.length > 0) {
+              // For other multiple choice questions with options
               // First, check for exact matches
               const exactMatch = question.options.find(opt => 
                 answerText.toLowerCase() === opt.toLowerCase() || 
@@ -316,7 +352,8 @@ Please respond with only the answers, with each set of answers separated by "---
       
       allAnswerSets.push(answersMap);
     });
-    return allAnswerSets[0] || {};
+    // Return all answer sets instead of just the first one
+    return allAnswerSets;
   };
 
   const submitToGoogleForm = async (formUrl, answers) => {
@@ -464,7 +501,7 @@ Please respond with only the answers, with each set of answers separated by "---
 
     console.log('Validating URL:', formUrl);
     if (!validateGoogleFormUrl(formUrl)) {
-      setError('Please enter a valid form URL. Supported formats:\n\nExternal Google Forms:\n- https://docs.google.com/forms/d/[ID]/viewform\n- https://docs.google.com/forms/d/[ID]/edit\n- https://forms.gle/[ID]\n- https://goo.gl/forms/[ID]\n\nInternal Forms:\n- localhost:5173/public/[ID] or any URL with /public/[ID]\n\nMake sure the form is publicly accessible and the URL is correct.');
+      setError('Please enter a valid form URL. Supported formats:\n\nInternal Forms:\n- localhost:5173/public/[ID] or any URL with /public/[ID]\n\nMake sure the form is publicly accessible and the URL is correct.');
       return;
     }
     
@@ -473,12 +510,18 @@ Please respond with only the answers, with each set of answers separated by "---
     setSuccess('');
     setShowModal(true);
     
-    // Immediately process the form after showing the modal
-    processForm();
+    // The processForm function will be called when the user clicks Generate in the modal
   };
   
   const processForm = async () => {
     console.log('processForm started');
+    
+    // Validate that positive + negative equals total count
+    if (responseOptions.positiveCount + responseOptions.negativeCount !== responseOptions.count) {
+      alert(`The sum of positive (${responseOptions.positiveCount}) and negative (${responseOptions.negativeCount}) responses must equal the total count (${responseOptions.count}).`);
+      return;
+    }
+    
     setIsLoading(true);
     setError('');
     setSuccess('');
@@ -520,12 +563,24 @@ Please respond with only the answers, with each set of answers separated by "---
         if (questions.length === 0) {
           throw new Error('No questions found in the form.');
         }
-        const prompt = generateGeminiPrompt(questions);
+        
+        // Check if form has nameUpload data
+        let namesList = [];
+        if (form.nameUpload && form.nameUpload.enabled && form.nameUpload.names && form.nameUpload.names.length > 0) {
+          namesList = form.nameUpload.names;
+          console.log('Using names from nameUpload:', namesList);
+        }
+        
+        const prompt = generateGeminiPrompt(questions, namesList);
         console.log('Generated prompt for Gemini');
         const geminiResponse = await callGeminiAPI(prompt);
         console.log('Gemini response received');
-        const answers = parseGeminiResponse(geminiResponse, questions);
-        console.log('Parsed answers:', answers);
+        const answerSets = parseGeminiResponse(geminiResponse, questions, namesList);
+        console.log(`Parsed ${answerSets.length} answer sets`);
+        
+        // Use the first answer set for display in the UI
+        const firstAnswerSet = answerSets[0] || {};
+        console.log('First answer set for UI display:', firstAnswerSet);
         // Helper functions for title normalization and date formatting (if not already defined)
         function isoDate(d = new Date()) {
           return d.toISOString().slice(0, 10); // YYYY-MM-DD
@@ -556,10 +611,10 @@ Please respond with only the answers, with each set of answers separated by "---
         console.log('FormData publicId:', formData.publicId);
         console.log('FormData formId:', formData.formId);
         setScrapedData(formData);
-        setAutoFilledAnswers(answers);
+        setAutoFilledAnswers(firstAnswerSet);
         
         // Submit responses directly with the data
-        await handleSubmitResponsesWithData(formData, answers);
+        await handleSubmitResponsesWithData(formData, answerSets);
       } else {
         console.log('Fetching form HTML from:', formUrl);
         let html = null;
@@ -909,7 +964,7 @@ Please respond with only the answers, with each set of answers separated by "---
         
         console.log('Created external form data:', formData);
         setScrapedData(formData);
-        setAutoFilledAnswers(answers);
+        setAutoFilledAnswers(firstAnswerSet);
         
         // Submit to external Google Form
         const submitted = await submitToGoogleForm(formUrl, answers);
@@ -1009,7 +1064,21 @@ Please respond with only the answers, with each set of answers separated by "---
       console.log('Manual questions:', questions);
 
       // Generate prompt for Gemini
-      const prompt = generateGeminiPrompt(questions);
+      // For manual questions, we don't have nameUpload data directly
+      // But we can check if there's a name question and use it
+      let namesList = [];
+      const nameQuestion = questions.find(q => 
+        q.text.toLowerCase() === 'name' || 
+        q.text.toLowerCase().includes('name') && 
+        (q.type === 'dropdown' || q.type === 'multiple-choice')
+      );
+      
+      if (nameQuestion && nameQuestion.options && nameQuestion.options.length > 0) {
+        namesList = nameQuestion.options;
+        console.log('Using names from name question options in handleGenerateManualResponses:', namesList);
+      }
+      
+      const prompt = generateGeminiPrompt(questions, namesList);
       console.log('Generated prompt for Gemini');
 
       // Call Gemini API
@@ -1017,8 +1086,12 @@ Please respond with only the answers, with each set of answers separated by "---
       console.log('Gemini response received');
 
       // Parse Gemini response
-      const answers = parseGeminiResponse(geminiResponse, questions);
-      console.log('Parsed answers:', answers);
+      const answerSets = parseGeminiResponse(geminiResponse, questions, namesList);
+      console.log(`Parsed ${answerSets.length} answer sets`);
+      
+      // Use the first answer set for display in the UI
+      const firstAnswerSet = answerSets[0] || {};
+      console.log('First answer set for UI display:', firstAnswerSet);
 
       // Helper functions for title normalization and date formatting (if not already defined)
       function isoDate(d = new Date()) {
@@ -1118,8 +1191,9 @@ Please respond with only the answers, with each set of answers separated by "---
     }
   };
   
-  const handleSubmitResponsesWithData = async (formData, answers) => {
-    console.log('handleSubmitResponsesWithData called with:', { formData, answers });
+  const handleSubmitResponsesWithData = async (formData, answerSets) => {
+    console.log('handleSubmitResponsesWithData called with:', { formData });
+    console.log(`Processing ${answerSets.length} answer sets`);
     
     if (!formData) {
       console.log('No form data provided');
@@ -1141,7 +1215,6 @@ Please respond with only the answers, with each set of answers separated by "---
       console.log('Public ID:', formData.publicId);
       console.log('Form ID:', formData.formId);
       
-      // Generate multiple sets of responses based on the count
       // Filter out any suspicious report questions
       const questions = formData.questions.filter(question => {
         const questionText = question.text || question.questionText;
@@ -1151,47 +1224,43 @@ Please respond with only the answers, with each set of answers separated by "---
       });
       console.log('Questions (filtered):', questions);
       
-      const prompt = generateGeminiPrompt(questions);
-      const geminiResponse = await callGeminiAPI(prompt);
+      // Check if we have nameUpload data in the form
+      let namesList = [];
+      if (formData.nameUpload && formData.nameUpload.enabled && 
+          formData.nameUpload.names && formData.nameUpload.names.length > 0) {
+        namesList = formData.nameUpload.names;
+        console.log('Using names from nameUpload in handleSubmitResponsesWithData:', namesList);
+      }
       
-      // Split the response into sets of answers
-      const answerSets = geminiResponse.split('---').map(set => set.trim());
-      console.log('Answer sets:', answerSets);
+      // If we don't have answer sets yet, generate them using Gemini
+      if (!answerSets || answerSets.length === 0) {
+        const prompt = generateGeminiPrompt(questions, namesList);
+        const geminiResponse = await callGeminiAPI(prompt);
+        answerSets = parseGeminiResponse(geminiResponse, questions, namesList);
+        console.log(`Generated ${answerSets.length} response sets`);
+      }
       
-      // Process and save each set of answers
-      for (const answerSet of answerSets) {
-        const answers = answerSet.split('\n').filter(line => line.trim());
+      // Process and save each answer set
+      for (let i = 0; i < answerSets.length; i++) {
+        const answerSet = answerSets[i];
+        console.log(`Processing answer set ${i+1}/${answerSets.length}:`, answerSet);
+        
+        // Create a response object for this answer set
         const answersMap = {};
         
-        questions.forEach((question, index) => {
-          if (index < answers.length) {
-            // Handle multiple-choice questions differently
-            if (question.type === 'multiple-choice' || question.type === 'checkbox' || 
-                question.type === 'multiple_choice' || question.type === 'checkboxes' || 
-                question.type === 'dropdown') {
-              const answerText = answers[index];
-              
-              // If the question has options, try to find the exact match
-              if (question.options && question.options.length > 0) {
-                const exactMatch = question.options.find(opt => 
-                  answerText.toLowerCase() === opt.toLowerCase() || 
-                  answerText.includes(opt));
-                
-                if (exactMatch) {
-                  // Use the exact option text from the question's options
-                  answersMap[question.text] = exactMatch;
-                } else {
-                  // If no exact match, use the first option as fallback
-                  answersMap[question.text] = question.options[0];
-                }
-              } else {
-                // If no options are available, just use the answer text
-                answersMap[question.text] = answerText;
-              }
-            } else {
-              // For text-based questions, use the answer as-is
-              answersMap[question.text] = answers[index];
-            }
+        questions.forEach((question) => {
+          // Get the answer for this question from the answer set
+          let answer = answerSet[question.id] || 'No answer generated';
+          answersMap[question.text] = answer;
+          
+          // Log name usage for debugging
+          const isNameQuestion = question.id === 'name_q' || 
+                               (question.metadata && question.metadata.source === 'name_upload') ||
+                               question.text.toLowerCase() === 'name' || 
+                               question.text.toLowerCase().includes('name');
+          
+          if (isNameQuestion) {
+            console.log(`Using name in set ${i+1}: ${answer}`);
           }
         });
         
@@ -1246,46 +1315,43 @@ Please respond with only the answers, with each set of answers separated by "---
                !questionText.includes("Report");
       });
       console.log('Questions (filtered):', questions);
-      const prompt = generateGeminiPrompt(questions);
+      
+      // Check if we have nameUpload data in the form
+      let namesList = [];
+      if (scrapedData.nameUpload && scrapedData.nameUpload.enabled && 
+          scrapedData.nameUpload.names && scrapedData.nameUpload.names.length > 0) {
+        namesList = scrapedData.nameUpload.names;
+        console.log('Using names from nameUpload in handleSubmitResponses:', namesList);
+      }
+      
+      const prompt = generateGeminiPrompt(questions, namesList);
       const geminiResponse = await callGeminiAPI(prompt);
       
-      // Split the response into sets of answers
-      const answerSets = geminiResponse.split('---').map(set => set.trim());
+      // Parse the response into answer sets using parseGeminiResponse
+      const answerSets = parseGeminiResponse(geminiResponse, questions, namesList);
+      console.log(`Generated ${answerSets.length} response sets`);
       
-      // Process and save each set of answers
-      for (const answerSet of answerSets) {
-        const answers = answerSet.split('\n').filter(line => line.trim());
+      // Process and save each answer set
+      for (let i = 0; i < answerSets.length; i++) {
+        const answerSet = answerSets[i];
+        console.log(`Processing answer set ${i+1}/${answerSets.length}:`, answerSet);
+        
+        // Create a response object for this answer set
         const answersMap = {};
         
-        questions.forEach((question, index) => {
-          if (index < answers.length) {
-            // Handle multiple-choice questions differently
-            if (question.type === 'multiple-choice' || question.type === 'checkbox' || 
-                question.type === 'multiple_choice' || question.type === 'checkboxes' || 
-                question.type === 'dropdown') {
-              const answerText = answers[index];
-              
-              // If the question has options, try to find the exact match
-              if (question.options && question.options.length > 0) {
-                const exactMatch = question.options.find(opt => 
-                  answerText.toLowerCase() === opt.toLowerCase() || 
-                  answerText.includes(opt));
-                
-                if (exactMatch) {
-                  // Use the exact option text from the question's options
-                  answersMap[question.text] = exactMatch;
-                } else {
-                  // If no exact match, use the first option as fallback
-                  answersMap[question.text] = question.options[0];
-                }
-              } else {
-                // If no options are available, just use the answer text
-                answersMap[question.text] = answerText;
-              }
-            } else {
-              // For text-based questions, use the answer as-is
-              answersMap[question.text] = answers[index];
-            }
+        questions.forEach((question) => {
+          // Get the answer for this question from the answer set
+          let answer = answerSet[question.id] || 'No answer generated';
+          answersMap[question.text] = answer;
+          
+          // Log name usage for debugging
+          const isNameQuestion = question.id === 'name_q' || 
+                               (question.metadata && question.metadata.source === 'name_upload') ||
+                               question.text.toLowerCase() === 'name' || 
+                               question.text.toLowerCase().includes('name');
+          
+          if (isNameQuestion) {
+            console.log(`Using name in set ${i+1}: ${answer}`);
           }
         });
         
@@ -1449,7 +1515,7 @@ Please respond with only the answers, with each set of answers separated by "---
               margin: 0,
               textShadow: '0 2px 4px rgba(0, 0, 0, 0.3)',
               letterSpacing: '-0.5px'
-            }}>Scarpe Form</h1>
+            }}>Autofill Form</h1>
           </div>
           <p style={{
             color: 'rgba(255, 255, 255, 0.9)',
@@ -1566,9 +1632,7 @@ Please respond with only the answers, with each set of answers separated by "---
                   Supported Form Types
                 </div>
                 <p style={{ margin: 0, lineHeight: '1.4' }}>
-                  <strong>External Google Forms:</strong> https://docs.google.com/forms/d/[ID]/viewform<br/>
                   <strong>Internal Forms:</strong> Any URL with /public/[ID]<br/>
-                  <strong>Short URLs:</strong> https://forms.gle/[ID] or https://goo.gl/forms/[ID]
                 </p>
               </div>
               
@@ -1925,9 +1989,9 @@ Please respond with only the answers, with each set of answers separated by "---
                 margin: '0 0 1.5rem 0'
               }}>
                 {[
-                  'Paste a public form URL (localhost:5174/public/...)',
+                  'Paste a form URL',
                   'Click "Generate & Submit" to extract questions',
-                  'Set how many responses to generate and the positive/negative ratio',
+                  'Set how many responses to generate and how many should be positive or negative',
                   'AI will generate realistic answers and submit them automatically',
                   'You\'ll be redirected to the form responses page to view results'
                 ].map((step, index) => (
@@ -1999,7 +2063,7 @@ Please respond with only the answers, with each set of answers separated by "---
                   lineHeight: '1.5',
                   fontSize: '0.95rem'
                 }}>
-                  Both internal forms (created in this app) and external Google Forms are supported. For external forms, make sure they are set to "Anyone with the link can respond". If automated scraping fails, use the "Enter Questions Manually" option below.
+                  Internal forms created in this app are supported. If automated scraping fails, use the "Enter Questions Manually" option below.
                 </p>
               </div>
             </div>
@@ -2095,7 +2159,7 @@ Please respond with only the answers, with each set of answers separated by "---
                 />
               </div>
               
-              <div style={{ marginBottom: '2.5rem' }}>
+              <div style={{ marginBottom: '2rem' }}>
                 <label style={{
                   display: 'block',
                   marginBottom: '0.75rem',
@@ -2103,33 +2167,110 @@ Please respond with only the answers, with each set of answers separated by "---
                   color: '#374151',
                   fontSize: '1rem'
                 }}>
-                  Positive sentiment ratio: <span style={{ color: '#673ab7' }}>{responseOptions.positiveRatio}%</span>
+                  Positive responses:
                 </label>
                 <input 
-                  type="range" 
+                  type="number" 
                   min="0" 
-                  max="100"
-                  value={responseOptions.positiveRatio}
-                  onChange={(e) => setResponseOptions({...responseOptions, positiveRatio: parseInt(e.target.value)})}
+                  max={responseOptions.count}
+                  value={responseOptions.positiveCount}
+                  onChange={(e) => {
+                    const positiveCount = parseInt(e.target.value) || 0;
+                    const totalCount = responseOptions.count;
+                    const negativeCount = totalCount - positiveCount;
+                    
+                    if (positiveCount <= totalCount) {
+                      setResponseOptions({
+                        ...responseOptions, 
+                        positiveCount: positiveCount,
+                        negativeCount: negativeCount
+                      });
+                    }
+                  }}
                   style={{
                     width: '100%',
-                    height: '8px',
-                    borderRadius: '4px',
-                    background: 'linear-gradient(to right, #ef4444 0%, #f59e0b 50%, #10b981 100%)',
-                    outline: 'none',
-                    cursor: 'pointer'
+                    padding: '1rem 1.25rem',
+                    border: '2px solid rgba(103, 58, 183, 0.2)',
+                    borderRadius: '12px',
+                    fontSize: '1rem',
+                    background: 'rgba(255, 255, 255, 0.8)',
+                    backdropFilter: 'blur(10px)',
+                    transition: 'all 0.3s ease'
+                  }}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = '#673ab7';
+                    e.target.style.boxShadow = '0 0 0 3px rgba(103, 58, 183, 0.1)';
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = 'rgba(103, 58, 183, 0.2)';
+                    e.target.style.boxShadow = 'none';
                   }}
                 />
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  fontSize: '0.875rem',
-                  color: '#666',
-                  marginTop: '0.5rem'
+              </div>
+              
+              <div style={{ marginBottom: '2rem' }}>
+                <label style={{
+                  display: 'block',
+                  marginBottom: '0.75rem',
+                  fontWeight: '600',
+                  color: '#374151',
+                  fontSize: '1rem'
                 }}>
-                  <span>0% Positive</span>
-                  <span>50% Mixed</span>
-                  <span>100% Positive</span>
+                  Negative responses:
+                </label>
+                <input 
+                  type="number" 
+                  min="0" 
+                  max={responseOptions.count}
+                  value={responseOptions.negativeCount}
+                  onChange={(e) => {
+                    const negativeCount = parseInt(e.target.value) || 0;
+                    const totalCount = responseOptions.count;
+                    const positiveCount = totalCount - negativeCount;
+                    
+                    if (negativeCount <= totalCount) {
+                      setResponseOptions({
+                        ...responseOptions, 
+                        negativeCount: negativeCount,
+                        positiveCount: positiveCount
+                      });
+                    }
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '1rem 1.25rem',
+                    border: '2px solid rgba(103, 58, 183, 0.2)',
+                    borderRadius: '12px',
+                    fontSize: '1rem',
+                    background: 'rgba(255, 255, 255, 0.8)',
+                    backdropFilter: 'blur(10px)',
+                    transition: 'all 0.3s ease'
+                  }}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = '#673ab7';
+                    e.target.style.boxShadow = '0 0 0 3px rgba(103, 58, 183, 0.1)';
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = 'rgba(103, 58, 183, 0.2)';
+                    e.target.style.boxShadow = 'none';
+                  }}
+                />
+              </div>
+              
+              <div style={{
+                background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(147, 51, 234, 0.1) 100%)',
+                border: '1px solid rgba(59, 130, 246, 0.2)',
+                borderRadius: '12px',
+                padding: '0.75rem',
+                marginBottom: '1.5rem',
+                fontSize: '0.9rem',
+                color: '#1e40af'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>Total: {responseOptions.positiveCount + responseOptions.negativeCount} / {responseOptions.count}</span>
                 </div>
               </div>
               

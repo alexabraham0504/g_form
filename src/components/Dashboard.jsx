@@ -156,6 +156,17 @@ const Dashboard = () => {
 
   const dashboardOptions = [
     {
+      id: 'google-form',
+      title: 'Create from Google Form',
+      description: 'Quickly import and create a form directly from an existing Google Form',
+      icon: (
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+        </svg>
+      ),
+      color: 'purple'
+    },
+    {
       id: 'create',
       title: 'Create New Form',
       description: 'Start building a new form from scratch',
@@ -204,6 +215,9 @@ const Dashboard = () => {
 
   const handleOptionClick = (optionId) => {
     switch (optionId) {
+      case 'google-form':
+        navigate('/google-form-import');
+        break;
       case 'create':
         navigate('/form-builder/new');
         break;

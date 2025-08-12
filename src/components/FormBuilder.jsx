@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { createForm, getForm, updateForm } from '../services/firestore';
 import AIGenerationModal from './AIGenerationModal';
 
-// Add custom styles for form input placeholders
+// Add custom styles for form input placeholders and animations
 const formInputStyles = `
   .form-title-input::placeholder {
     color: #9ca3af;
@@ -14,8 +14,49 @@ const formInputStyles = `
     color: #9ca3af;
     font-size: 0.875rem;
   }
+  
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+  
+  .name-question {
+    border-left: 3px solid #4f46e5;
+  }
+  
+  .locked-question {
+    background-color: rgba(243, 244, 246, 0.5);
+  }
+  
+  .locked-indicator {
+    color: #ef4444;
+    margin-left: 5px;
+  }
+  
+  .locked-text {
+    color: #ef4444;
+    font-size: 0.8rem;
+    font-style: italic;
+  }
+  
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  
+  input:disabled {
+    background-color: #f3f4f6;
+    cursor: not-allowed;
+  }
 `;
 
+
+// Add the styles to the document head
+if (typeof document !== 'undefined') {
+  const styleElement = document.createElement('style');
+  styleElement.textContent = formInputStyles;
+  document.head.appendChild(styleElement);
+}
 
 const FormBuilder = () => {
   const { user } = useAuth();
@@ -42,6 +83,17 @@ const FormBuilder = () => {
     endDate: '',
     confirmationMessage: 'Your response has been recorded.'
   });
+  
+  // Name Upload feature state
+  const [nameUpload, setNameUpload] = useState({
+    enabled: false,
+    names: [],
+    inputMethod: 'manual', // 'manual' or 'csv'
+    manualInput: '',
+    isSaving: false,
+    message: '',
+    locked: false // true if responses have been generated
+  });
 
   // Load existing form if editing
   useEffect(() => {
@@ -54,6 +106,13 @@ const FormBuilder = () => {
     try {
       setIsLoading(true);
       const form = await getForm(user.uid, formId);
+      
+      // Check if form has responses
+      const hasResponses = form.hasResponses || false;
+      
+      // Check if there's a name question in the form
+      const nameQuestion = form.questions.find(q => q.id === 'name_q' || (q.metadata && q.metadata.source === 'name_upload'));
+      
       setFormData({
         title: form.title || '',
         description: form.description || '',
@@ -61,12 +120,50 @@ const FormBuilder = () => {
         questions: form.questions || [],
         publicId: form.publicId || '' // Assuming publicId is part of the form data
       });
+      
       setSettings({
         acceptingResponses: form.acceptingResponses !== undefined ? form.acceptingResponses : true,
         startDate: form.startDate || '',
         endDate: form.endDate || '',
         confirmationMessage: form.confirmationMessage || 'Your response has been recorded.'
       });
+      
+      // Load name upload data if it exists
+      if (form.nameUpload) {
+        setNameUpload({
+          enabled: form.nameUpload.enabled || false,
+          names: form.nameUpload.names || [],
+          inputMethod: form.nameUpload.inputMethod || 'manual',
+          manualInput: form.nameUpload.names ? form.nameUpload.names.join('\n') : '',
+          isSaving: false,
+          message: '',
+          locked: hasResponses // Lock if form has responses
+        });
+        
+        // If name upload is enabled but no name question exists, create it
+        if (form.nameUpload.enabled && !nameQuestion && form.nameUpload.names && form.nameUpload.names.length > 0) {
+          const nameQuestion = {
+            id: 'name_q',
+            type: 'dropdown',
+            questionText: 'Name',
+            options: form.nameUpload.names,
+            required: false,
+            metadata: { source: 'name_upload' }
+          };
+          
+          // Add name question as the first question
+          setFormData(prev => ({
+            ...prev,
+            questions: [nameQuestion, ...prev.questions]
+          }));
+        }
+      } else {
+        // If no name upload data exists but form has responses, set default with locked state
+        setNameUpload(prev => ({
+          ...prev,
+          locked: hasResponses
+        }));
+      }
     } catch (error) {
       console.error('Error loading form:', error);
       setMessage('Error loading form');
@@ -98,6 +195,13 @@ const FormBuilder = () => {
   };
 
   const updateQuestion = (questionId, field, value) => {
+    // Check if this is the name question and if it's locked
+    const question = formData.questions.find(q => q.id === questionId);
+    if (question && question.id === 'name_q' && nameUpload.locked) {
+      showPopupMessage('Cannot modify the Name question after responses have been generated');
+      return;
+    }
+    
     setFormData(prev => ({
       ...prev,
       questions: prev.questions.map(q =>
@@ -107,6 +211,13 @@ const FormBuilder = () => {
   };
 
   const deleteQuestion = (questionId) => {
+    // Check if this is the name question and if it's locked
+    const question = formData.questions.find(q => q.id === questionId);
+    if (question && question.id === 'name_q' && nameUpload.locked) {
+      showPopupMessage('Cannot delete the Name question after responses have been generated');
+      return;
+    }
+    
     setFormData(prev => ({
       ...prev,
       questions: prev.questions.filter(q => q.id !== questionId)
@@ -114,21 +225,37 @@ const FormBuilder = () => {
   };
 
   const duplicateQuestion = (questionId) => {
+    // Check if this is the name question and if it's locked
     const questionToDuplicate = formData.questions.find(q => q.id === questionId);
-    if (questionToDuplicate) {
-      const newQuestion = {
-        ...questionToDuplicate,
-        id: Date.now() + Math.random(),
-        questionText: questionToDuplicate.questionText + ' (Copy)'
-      };
-      setFormData(prev => ({
-        ...prev,
-        questions: [...prev.questions, newQuestion]
-      }));
+    if (!questionToDuplicate) return;
+    
+    if ((questionToDuplicate.id === 'name_q' || 
+        (questionToDuplicate.metadata && questionToDuplicate.metadata.source === 'name_upload')) && 
+        nameUpload.locked) {
+      showPopupMessage('Cannot duplicate the Name question after responses have been generated');
+      return;
     }
+    
+    const newQuestion = {
+      ...questionToDuplicate,
+      id: Date.now() + Math.random(),
+      questionText: questionToDuplicate.questionText + ' (Copy)'
+    };
+    
+    setFormData(prev => ({
+      ...prev,
+      questions: [...prev.questions, newQuestion]
+    }));
   };
 
   const addOption = (questionId) => {
+    // Check if this is the name question and if it's locked
+    const question = formData.questions.find(q => q.id === questionId);
+    if (question && question.id === 'name_q' && nameUpload.locked) {
+      showPopupMessage('Cannot modify the Name question options after responses have been generated');
+      return;
+    }
+    
     setFormData(prev => ({
       ...prev,
       questions: prev.questions.map(q =>
@@ -140,6 +267,13 @@ const FormBuilder = () => {
   };
 
   const updateOption = (questionId, optionIndex, value) => {
+    // Check if this is the name question and if it's locked
+    const question = formData.questions.find(q => q.id === questionId);
+    if (question && question.id === 'name_q' && nameUpload.locked) {
+      showPopupMessage('Cannot modify the Name question options after responses have been generated');
+      return;
+    }
+    
     setFormData(prev => ({
       ...prev,
       questions: prev.questions.map(q =>
@@ -156,6 +290,13 @@ const FormBuilder = () => {
   };
 
   const removeOption = (questionId, optionIndex) => {
+    // Check if this is the name question and if it's locked
+    const question = formData.questions.find(q => q.id === questionId);
+    if (question && question.id === 'name_q' && nameUpload.locked) {
+      showPopupMessage('Cannot modify the Name question options after responses have been generated');
+      return;
+    }
+    
     setFormData(prev => ({
       ...prev,
       questions: prev.questions.map(q =>
@@ -167,6 +308,227 @@ const FormBuilder = () => {
           : q
       )
     }));
+  };
+
+  // Name Upload feature handlers
+  const handleNameUploadToggle = (e) => {
+    // If locked, don't allow changes
+    if (nameUpload.locked) {
+      showPopupMessage('Cannot modify name upload settings after responses have been generated');
+      return;
+    }
+    
+    setNameUpload(prev => ({
+      ...prev,
+      enabled: e.target.checked,
+      message: ''
+    }));
+  };
+  
+  const handleInputMethodChange = (method) => {
+    // If locked, don't allow changes
+    if (nameUpload.locked) return;
+    
+    setNameUpload(prev => ({
+      ...prev,
+      inputMethod: method,
+      message: ''
+    }));
+  };
+  
+  const handleManualInputChange = (e) => {
+    // If locked, don't allow changes
+    if (nameUpload.locked) return;
+    
+    setNameUpload(prev => ({
+      ...prev,
+      manualInput: e.target.value,
+      message: ''
+    }));
+  };
+  
+  const handleCsvUpload = (e) => {
+    // If locked, don't allow changes
+    if (nameUpload.locked) return;
+    
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    // Check if it's a CSV file
+    if (file.type !== 'text/csv' && !file.name.endsWith('.csv')) {
+      setNameUpload(prev => ({
+        ...prev,
+        message: 'Error: Please upload a CSV file'
+      }));
+      return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const csvContent = event.target.result;
+        // Split by newline and filter out empty lines
+        const names = csvContent.split(/\r?\n/)
+          .map(name => name.trim())
+          .filter(name => name.length > 0);
+        
+        if (names.length === 0) {
+          setNameUpload(prev => ({
+            ...prev,
+            message: 'Error: No names found in the CSV file'
+          }));
+          return;
+        }
+        
+        setNameUpload(prev => ({
+          ...prev,
+          names,
+          message: `${names.length} names loaded successfully`
+        }));
+      } catch (error) {
+        console.error('Error parsing CSV:', error);
+        setNameUpload(prev => ({
+          ...prev,
+          message: 'Error: Failed to parse CSV file'
+        }));
+      }
+    };
+    
+    reader.onerror = () => {
+      setNameUpload(prev => ({
+        ...prev,
+        message: 'Error: Failed to read CSV file'
+      }));
+    };
+    
+    reader.readAsText(file);
+  };
+  
+  // Save name upload data and add/update name dropdown question
+  const saveNameUpload = () => {
+    // If locked, don't allow changes
+    if (nameUpload.locked) return;
+    
+    setNameUpload(prev => ({ ...prev, isSaving: true, message: '' }));
+    
+    try {
+      let names = [];
+      
+      if (nameUpload.inputMethod === 'manual') {
+        // Process manual input - split by newline and filter empty lines
+        names = nameUpload.manualInput.split('\n')
+          .map(name => name.trim())
+          .filter(name => name.length > 0);
+      } else {
+        // Use already parsed CSV names
+        names = nameUpload.names;
+      }
+      
+      if (names.length === 0) {
+        setNameUpload(prev => ({
+          ...prev,
+          isSaving: false,
+          message: 'Error: No names provided'
+        }));
+        return;
+      }
+      
+      // Update state with processed names
+      setNameUpload(prev => ({
+        ...prev,
+        names,
+        isSaving: false,
+        message: `${names.length} names saved successfully`
+      }));
+      
+      // Add or update the name dropdown question
+      const nameQuestionId = 'name_q';
+      const existingNameQuestion = formData.questions.find(q => q.id === nameQuestionId);
+      
+      if (existingNameQuestion) {
+        // Update existing name question
+        setFormData(prev => ({
+          ...prev,
+          questions: prev.questions.map(q => 
+            q.id === nameQuestionId 
+              ? { ...q, options: names, metadata: { ...q.metadata, source: 'name_upload' } }
+              : q
+          )
+        }));
+      } else {
+        // Create new name question and add it as the first question
+        const nameQuestion = {
+          id: nameQuestionId,
+          type: 'dropdown',
+          questionText: 'Name',
+          options: names,
+          required: false,
+          metadata: { source: 'name_upload' }
+        };
+        
+        setFormData(prev => ({
+          ...prev,
+          questions: [nameQuestion, ...prev.questions]
+        }));
+      }
+      
+      // Save to database without redirecting
+      saveFormWithoutRedirect();
+    } catch (error) {
+      console.error('Error saving names:', error);
+      setNameUpload(prev => ({
+        ...prev,
+        isSaving: false,
+        message: 'Error: Failed to save names'
+      }));
+    }
+  };
+  
+  // Save form without redirecting (for name upload)
+  const saveFormWithoutRedirect = async () => {
+    try {
+      const formToSave = {
+        title: formData.title.trim(),
+        description: formData.description ? formData.description.trim() : '',
+        createdAt: new Date(formData.createdAt || new Date()),
+        questions: formData.questions.map(q => ({
+          id: q.id, // Preserve the id
+          type: q.type || 'short-answer',
+          questionText: q.questionText ? q.questionText.trim() : '',
+          options: q.options || [],
+          required: q.required !== undefined ? q.required : false,
+          min: q.min !== undefined ? q.min : null,
+          max: q.max !== undefined ? q.max : null,
+          metadata: q.metadata // Preserve metadata
+        })),
+        acceptingResponses: settings.acceptingResponses !== undefined ? settings.acceptingResponses : true,
+        startDate: settings.startDate || '',
+        endDate: settings.endDate || '',
+        confirmationMessage: settings.confirmationMessage || 'Your response has been recorded.',
+        // Include name upload data
+        nameUpload: nameUpload.enabled ? {
+          enabled: nameUpload.enabled,
+          names: nameUpload.names,
+          inputMethod: nameUpload.inputMethod,
+          locked: nameUpload.locked
+        } : null
+      };
+
+      if (formId && formId !== 'new') {
+        await updateForm(user.uid, formId, formToSave);
+        setMessage('Form updated successfully!');
+      } else {
+        const newFormId = await createForm(user.uid, formToSave);
+        // If this is a new form, update the URL to include the new form ID
+        if (newFormId) {
+          navigate(`/form/${newFormId}`, { replace: true });
+        }
+        setMessage('Form saved successfully!');
+      }
+    } catch (error) {
+      console.error('Error saving form:', error);
+      setMessage('Error saving form. Please try again.');
+    }
   };
 
   const handleSave = async () => {
@@ -199,7 +561,14 @@ const FormBuilder = () => {
         acceptingResponses: settings.acceptingResponses !== undefined ? settings.acceptingResponses : true,
         startDate: settings.startDate || '',
         endDate: settings.endDate || '',
-        confirmationMessage: settings.confirmationMessage || 'Your response has been recorded.'
+        confirmationMessage: settings.confirmationMessage || 'Your response has been recorded.',
+        // Include name upload data
+        nameUpload: nameUpload.enabled ? {
+          enabled: nameUpload.enabled,
+          names: nameUpload.names,
+          inputMethod: nameUpload.inputMethod,
+          locked: nameUpload.locked
+        } : null
       };
 
       if (formId && formId !== 'new') {
@@ -298,17 +667,38 @@ const FormBuilder = () => {
       setPopupMessage('');
     }, 3000);
   };
+  
+  // Placeholder for removed duplicate functions
+  // The name upload feature handlers are now defined earlier in the file
 
   const renderQuestion = (question, index) => {
+    // Check if this is the name question and if it's locked
+    const isNameQuestion = question.id === 'name_q' || (question.metadata && question.metadata.source === 'name_upload');
+    const isLocked = isNameQuestion && nameUpload.locked;
+    
     return (
-      <div key={question.id} className="question-card">
+      <div key={question.id} className={`question-card ${isNameQuestion ? 'name-question' : ''} ${isLocked ? 'locked-question' : ''}`}>
         <div className="question-header">
-          <div className="question-number">Question {index + 1}</div>
+          <div className="question-number">
+            {isNameQuestion ? (
+              <span>
+                Question {index + 1} - Name Question 
+                {isLocked && (
+                  <span className="locked-indicator" title="This question is locked because responses exist">
+                    🔒
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span>Question {index + 1}</span>
+            )}
+          </div>
           <div className="question-actions">
             <button
               onClick={() => duplicateQuestion(question.id)}
               className="action-btn"
               title="Duplicate"
+              disabled={isLocked}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -317,7 +707,8 @@ const FormBuilder = () => {
             <button
               onClick={() => deleteQuestion(question.id)}
               className="action-btn delete"
-              title="Delete"
+              title={isLocked ? "Cannot delete - responses exist" : "Delete"}
+              disabled={isLocked}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -349,6 +740,7 @@ const FormBuilder = () => {
               value={question.questionText}
               onChange={e => updateQuestion(question.id, 'questionText', e.target.value)}
               className="question-text-input"
+              disabled={isLocked}
             />
           </div>
           {(question.type === 'multiple-choice' || question.type === 'checkboxes' || question.type === 'dropdown') && (
@@ -356,10 +748,12 @@ const FormBuilder = () => {
               <div className="options-header">
                 <span className="options-label">
                   {question.type === 'multiple-choice' ? 'Options' : question.type === 'checkboxes' ? 'Checkbox options' : 'Dropdown options'}
+                  {isLocked && <span className="locked-text"> (Locked - responses exist)</span>}
                 </span>
                 <button
                   onClick={() => addOption(question.id)}
                   className="add-option-btn"
+                  disabled={isLocked}
                 >
                   Add Option
                 </button>
@@ -382,12 +776,14 @@ const FormBuilder = () => {
                       value={option}
                       onChange={e => updateOption(question.id, optionIndex, e.target.value)}
                       className="option-input"
+                      disabled={isLocked}
                     />
                   </div>
                   {question.options.length > 1 && (
                     <button
                       onClick={() => removeOption(question.id, optionIndex)}
                       className="remove-option-btn"
+                      disabled={isLocked}
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -427,8 +823,10 @@ const FormBuilder = () => {
                 type="checkbox"
                 checked={question.required}
                 onChange={e => updateQuestion(question.id, 'required', e.target.checked)}
+                disabled={isLocked}
               />
               <span>Required</span>
+              {isLocked && <span className="locked-text"> (Locked)</span>}
             </label>
           </div>
         </div>
@@ -558,7 +956,41 @@ const FormBuilder = () => {
           Back to Dashboard
         </button>
       </div>
-      <div className="form-builder-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', background: '#f5f5f5', padding: '1rem 2rem', marginBottom: '1rem' }}>
+      <div className="form-builder-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', background: '#f5f5f5', padding: '1rem 2rem', marginBottom: '1rem', gap: '1rem' }}>
+        <button
+          className="btn-secondary"
+          style={{ 
+            borderRadius: 12, 
+            fontWeight: 600, 
+            fontSize: 14, 
+            padding: '0.75rem 1.5rem',
+            background: '#e9ecef',
+            border: '1px solid #ced4da',
+            color: '#495057',
+            boxShadow: '0 1px 4px rgba(0, 0, 0, 0.05)',
+            transition: 'all 0.3s ease',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            cursor: 'pointer'
+          }}
+          onClick={() => navigate('/google-form-import')}
+          onMouseEnter={(e) => {
+            e.target.style.background = '#dee2e6';
+            e.target.style.transform = 'translateY(-1px)';
+            e.target.style.boxShadow = '0 2px 6px rgba(0, 0, 0, 0.08)';
+          }}
+          onMouseLeave={(e) => {
+            e.target.style.background = '#e9ecef';
+            e.target.style.transform = 'translateY(0)';
+            e.target.style.boxShadow = '0 1px 4px rgba(0, 0, 0, 0.05)';
+          }}
+        >
+          <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+          </svg>
+          Create from Google Form
+        </button>
         <button
           className="btn-secondary"
           style={{ 
@@ -666,6 +1098,164 @@ const FormBuilder = () => {
                   style={{ fontSize: 15 }}
                 />
               </div>
+            </div>
+            
+            {/* Name Upload Section */}
+            <div style={{ marginTop: '2rem', padding: '1.5rem', background: '#f9fafb', borderRadius: 8, border: '1px solid #ede7f6' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <h3 style={{ margin: 0, fontWeight: 600, color: 'var(--gforms-purple)' }}>Name Upload (Optional)</h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <label style={{ fontWeight: 500 }}>Enable:</label>
+                  <input
+                    type="checkbox"
+                    checked={nameUpload.enabled}
+                    onChange={handleNameUploadToggle}
+                    disabled={nameUpload.locked}
+                    style={{ width: 20, height: 20, accentColor: 'var(--gforms-purple)' }}
+                  />
+                </div>
+              </div>
+              
+              {nameUpload.locked && (
+                <div style={{ 
+                  padding: '0.75rem', 
+                  background: 'rgba(255, 193, 7, 0.1)', 
+                  border: '1px solid rgba(255, 193, 7, 0.3)', 
+                  borderRadius: 6, 
+                  marginBottom: 16,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8
+                }}>
+                  <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="#f59e0b">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <span style={{ color: '#92400e', fontSize: '0.9rem' }}>
+                    This feature is locked because responses have already been generated.
+                  </span>
+                </div>
+              )}
+              
+              {nameUpload.enabled && (
+                <div style={{ opacity: nameUpload.locked ? 0.7 : 1 }}>
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
+                      <button
+                        onClick={() => handleInputMethodChange('manual')}
+                        style={{
+                          padding: '0.5rem 1rem',
+                          background: nameUpload.inputMethod === 'manual' ? 'var(--gforms-purple)' : '#e9ecef',
+                          color: nameUpload.inputMethod === 'manual' ? 'white' : '#495057',
+                          border: '1px solid ' + (nameUpload.inputMethod === 'manual' ? 'var(--gforms-purple)' : '#ced4da'),
+                          borderRadius: 6,
+                          fontWeight: 500,
+                          cursor: nameUpload.locked ? 'not-allowed' : 'pointer'
+                        }}
+                        disabled={nameUpload.locked}
+                      >
+                        Manual Entry
+                      </button>
+                      <button
+                        onClick={() => handleInputMethodChange('csv')}
+                        style={{
+                          padding: '0.5rem 1rem',
+                          background: nameUpload.inputMethod === 'csv' ? 'var(--gforms-purple)' : '#e9ecef',
+                          color: nameUpload.inputMethod === 'csv' ? 'white' : '#495057',
+                          border: '1px solid ' + (nameUpload.inputMethod === 'csv' ? 'var(--gforms-purple)' : '#ced4da'),
+                          borderRadius: 6,
+                          fontWeight: 500,
+                          cursor: nameUpload.locked ? 'not-allowed' : 'pointer'
+                        }}
+                        disabled={nameUpload.locked}
+                      >
+                        CSV Upload
+                      </button>
+                    </div>
+                    
+                    {nameUpload.inputMethod === 'manual' ? (
+                      <div>
+                        <label style={{ fontWeight: 500, display: 'block', marginBottom: 8 }}>
+                          Enter one name per line:
+                        </label>
+                        <textarea
+                          value={nameUpload.manualInput}
+                          onChange={handleManualInputChange}
+                          disabled={nameUpload.locked}
+                          placeholder="John Smith\nJane Doe\nAlex Johnson"
+                          style={{
+                            width: '100%',
+                            minHeight: '120px',
+                            padding: '0.75rem',
+                            borderRadius: 6,
+                            border: '1px solid #ced4da',
+                            resize: 'vertical'
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <label style={{ fontWeight: 500, display: 'block', marginBottom: 8 }}>
+                          Upload CSV file (single column of names):
+                        </label>
+                        <input
+                          type="file"
+                          accept=".csv,text/csv"
+                          onChange={handleCsvUpload}
+                          disabled={nameUpload.locked}
+                          style={{
+                            display: 'block',
+                            width: '100%',
+                            padding: '0.5rem 0'
+                          }}
+                        />
+                        {nameUpload.names.length > 0 && (
+                          <div style={{ marginTop: 8, fontSize: '0.9rem', color: '#4b5563' }}>
+                            {nameUpload.names.length} names loaded
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      {nameUpload.message && (
+                        <div style={{
+                          fontSize: '0.9rem',
+                          color: nameUpload.message.includes('Error') ? '#dc2626' : '#059669',
+                          fontWeight: 500
+                        }}>
+                          {nameUpload.message}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      onClick={saveNameUpload}
+                      disabled={nameUpload.isSaving || nameUpload.locked}
+                      style={{
+                        padding: '0.5rem 1.5rem',
+                        background: 'var(--gforms-purple)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: 6,
+                        fontWeight: 600,
+                        cursor: nameUpload.locked ? 'not-allowed' : 'pointer',
+                        opacity: nameUpload.isSaving || nameUpload.locked ? 0.7 : 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8
+                      }}
+                    >
+                      {nameUpload.isSaving ? (
+                        <>
+                          <div style={{ width: 16, height: 16, border: '2px solid white', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+                          Saving...
+                        </>
+                      ) : 'Save Names'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

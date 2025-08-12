@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { generateQuestions } from '../services/gemini';
+import { useAuth } from '../contexts/AuthContext';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase/config';
 
 const AIGenerationModal = ({ isOpen, onClose, onQuestionsGenerated, formTitle }) => {
+  const { user } = useAuth();
   const [totalQuestions, setTotalQuestions] = useState(5);
   const [questionTypes, setQuestionTypes] = useState({
     shortAnswer: 2,
@@ -14,8 +18,34 @@ const AIGenerationModal = ({ isOpen, onClose, onQuestionsGenerated, formTitle })
   const [showSuccess, setShowSuccess] = useState(false);
   const [generatedStats, setGeneratedStats] = useState({});
   const [currentStep, setCurrentStep] = useState(1); // 1: Select questions count, 2: Select question types
+  const [userApiKey, setUserApiKey] = useState('');
 
   const questionCounts = [5, 10, 15];
+
+  // Fetch user's API key from Firestore settings on component mount
+  useEffect(() => {
+    if (user && isOpen) {
+      fetchUserApiKey();
+    }
+  }, [user, isOpen]);
+
+  // Fetch user's API key from Firestore settings
+  const fetchUserApiKey = async () => {
+    try {
+      const userSettingsRef = doc(db, 'users', user.uid, 'settings', 'gemini');
+      const docSnap = await getDoc(userSettingsRef);
+      
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.apiKey) {
+          setUserApiKey(data.apiKey);
+          console.log('User API key loaded from settings in AIGenerationModal');
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching user API key:', error);
+    }
+  };
 
   const updateQuestionType = (type, value) => {
     // Calculate current total excluding the current type
@@ -105,7 +135,7 @@ const AIGenerationModal = ({ isOpen, onClose, onQuestionsGenerated, formTitle })
       setError('');
       
       console.log('Starting AI generation with:', { formTitle, totalQuestions, questionTypes });
-      const generatedQuestions = await generateQuestions(formTitle, totalQuestions, questionTypes);
+      const generatedQuestions = await generateQuestions(formTitle, totalQuestions, questionTypes, userApiKey);
       console.log('Generated questions:', generatedQuestions);
       
       // Set success stats

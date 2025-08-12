@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { getFormByPublicId, savePublicFormResponse, createForm } from '../services/firestore';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase/config';
 
 const AutoFillForm = () => {
   const { user } = useAuth();
@@ -23,8 +25,32 @@ const AutoFillForm = () => {
     positiveCount: 3,
     negativeCount: 2
   });
+  const [userApiKey, setUserApiKey] = useState('');
 
+  // Fetch user's API key from Firestore settings on component mount
+  useEffect(() => {
+    if (user) {
+      fetchUserApiKey();
+    }
+  }, [user]);
 
+  // Fetch user's API key from Firestore settings
+  const fetchUserApiKey = async () => {
+    try {
+      const userSettingsRef = doc(db, 'users', user.uid, 'settings', 'gemini');
+      const docSnap = await getDoc(userSettingsRef);
+      
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.apiKey) {
+          setUserApiKey(data.apiKey);
+          console.log('User API key loaded from settings');
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching user API key:', error);
+    }
+  };
 
   const validateGoogleFormUrl = (url) => {
     const googleFormPatterns = [
@@ -253,13 +279,19 @@ Please respond with only the answers, with each set of answers separated by "---
   };
 
   const callGeminiAPI = async (prompt) => {
-    const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+    // First try to get API key from user's Firestore settings
+    let apiKey = userApiKey;
     
-    if (!GEMINI_API_KEY) {
-      throw new Error('Gemini API key not found. Please add VITE_GEMINI_API_KEY to your .env file.');
+    // If no user API key, fall back to environment variable
+    if (!apiKey) {
+      apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    }
+    
+    if (!apiKey) {
+      throw new Error('Gemini API key not found. Please add your API key in the Settings page or add VITE_GEMINI_API_KEY to your .env file.');
     }
 
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -1,20 +1,27 @@
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+// Remove the hardcoded API key import
+// const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
 // Debug function to check API key
-const debugAPIKey = () => {
-  console.log('API Key available:', !!GEMINI_API_KEY);
-  console.log('API Key length:', GEMINI_API_KEY ? GEMINI_API_KEY.length : 0);
-  console.log('API Key starts with:', GEMINI_API_KEY ? GEMINI_API_KEY.substring(0, 10) + '...' : 'N/A');
+const debugAPIKey = (apiKey) => {
+  console.log('API Key available:', !!apiKey);
+  console.log('API Key length:', apiKey ? apiKey.length : 0);
+  console.log('API Key starts with:', apiKey ? apiKey.substring(0, 10) + '...' : 'N/A');
 };
 
-export const generateQuestions = async (formTitle, totalQuestions, questionTypes) => {
+export const generateQuestions = async (formTitle, totalQuestions, questionTypes, apiKey = null) => {
   try {
+    // First try to use the passed API key, then fall back to environment variable
+    let keyToUse = apiKey;
+    if (!keyToUse) {
+      keyToUse = import.meta.env.VITE_GEMINI_API_KEY;
+    }
+    
     // Debug API key
-    debugAPIKey();
+    debugAPIKey(keyToUse);
     
     // Check if API key is available
-    if (!GEMINI_API_KEY) {
-      throw new Error('Gemini API key is not configured. Please check your .env file.');
+    if (!keyToUse) {
+      throw new Error('Gemini API key is not configured. Please add your API key in the Settings page or check your .env file.');
     }
 
     const prompt = `Generate ${totalQuestions} questions for a form titled "${formTitle}". 
@@ -40,8 +47,8 @@ export const generateQuestions = async (formTitle, totalQuestions, questionTypes
     
     Make sure the questions are diverse, relevant to the form title, and professionally worded.`;
 
-    // Use the correct Gemini API endpoint
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+    // Use the correct Gemini API endpoint with the API key
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${keyToUse}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

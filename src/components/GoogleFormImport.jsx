@@ -1,15 +1,18 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { createForm } from '../services/firestore';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase/config';
 
 const GoogleFormImport = () => {
-  const navigate = useNavigate();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [formUrl, setFormUrl] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [userApiKey, setUserApiKey] = useState('');
   
   // Mock data for the form preview
   const [mockForm, setMockForm] = useState({
@@ -44,6 +47,31 @@ const GoogleFormImport = () => {
       }
     ]
   });
+
+  // Fetch user's API key from Firestore settings on component mount
+  useEffect(() => {
+    if (user) {
+      fetchUserApiKey();
+    }
+  }, [user]);
+
+  // Fetch user's API key from Firestore settings
+  const fetchUserApiKey = async () => {
+    try {
+      const userSettingsRef = doc(db, 'users', user.uid, 'settings', 'gemini');
+      const docSnap = await getDoc(userSettingsRef);
+      
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.apiKey) {
+          setUserApiKey(data.apiKey);
+          console.log('User API key loaded from settings in GoogleFormImport');
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching user API key:', error);
+    }
+  };
 
   const handleUrlChange = (e) => {
     setFormUrl(e.target.value);
@@ -112,7 +140,13 @@ const GoogleFormImport = () => {
         ${html}
       `;
       
-      const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${import.meta.env.VITE_GEMINI_API_KEY}`, {
+      // Use user's API key if available, otherwise fall back to environment variable
+      const apiKey = userApiKey || import.meta.env.VITE_GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('Gemini API key not found. Please add your API key in the Settings page or add VITE_GEMINI_API_KEY to your .env file.');
+      }
+      
+      const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
